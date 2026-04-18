@@ -1,0 +1,99 @@
+---
+scope: src/bin
+description: CLI entry point — parses input, orchestrates the fetch/score/render pipeline, and maps all outcomes to exit codes
+intent: >
+  The bin module is the user-facing shell of pkg-pulse. A developer runs
+  `pkg-pulse <package-name>` and expects either a formatted health report
+  printed to stdout and a clean exit, or a clear error message on stderr and
+  a meaningful exit code they can act on or script against. This module owns
+  nothing except the seam between the operating system and the rest of the
+  pipeline: it validates input, wires the three internal stages together,
+  handles every error path, and exits with the correct code. Success means
+  the user never has to read source code to understand what went wrong.
+outcomes:
+  desired:
+    - A valid package name produces a rendered health report on stdout and exits 0.
+    - An invalid package name produces a usage-oriented message on stderr and exits 3 without making any network calls.
+    - A package that does not exist on the registry produces a descriptive message on stderr and exits 1.
+    - A total network failure produces a descriptive message on stderr and exits 2.
+    - Running without a GITHUB_TOKEN emits a rate-limit warning to stderr and continues — it does not abort the run.
+  undesired:
+    - Swallowing an error silently and exiting 0 with an empty or partial report.
+    - Writing error messages to stdout, which corrupts the report in scripted pipelines.
+    - Using a single catch-all exit code for all failure modes, making the CLI unscriptable.
+    - Performing network calls before input validation completes.
+    - Treating a missing GITHUB_TOKEN as a fatal error rather than a degraded-mode warning.
+---
+
+## Context
+
+<!-- REPLACE THIS COMMENT with the Context body. Rules for what goes here:
+  - Explain why this module exists and the domain-level problem it solves.
+  - Write for a strong generalist engineer who does not know this specific domain.
+  - Cover the constraints that shape the problem, the stakes of getting it wrong,
+    and why a naive implementation would fail.
+  - Do not restate context already carried by a parent `.aide`; child specs inherit.
+  - Only include context specific to this module's scope.
+  - No code, no filenames, no type signatures.
+  Delete this entire HTML comment once the real Context is written. -->
+
+## Strategy
+
+<!-- REPLACE THIS COMMENT with the Strategy body. Rules for what goes here:
+  - Describe how this module honors its `intent` and hits `outcomes.desired`
+    without tripping `outcomes.undesired`.
+  - Distill research (from the brain or an adjacent `research.aide`) into
+    actionable decisions.
+  - Write in decision form, not description form: each paragraph states a
+    concrete choice (tactic, threshold, structural decision, sequencing rule)
+    and the reasoning or data that justifies it.
+  - An architect agent must be able to read this and know what to do AND why
+    that approach beats the alternatives, so it can produce a plan the
+    implementor can execute without further architectural decisions.
+  - Cite sources inline, compressed: name the source, name the number or finding
+    that matters, move on. No footnotes.
+  - No code, no filenames, no type signatures, no function names, no worked
+    code examples. If the implementation were rewritten from scratch this
+    section should survive untouched.
+  Delete this entire HTML comment once the real Strategy is written. -->
+
+## Good examples
+
+<!-- REPLACE THIS COMMENT with concrete domain examples of success for this
+  module's output. Rules for what goes here:
+  - Real domain output, not code. If the module produces text, show a passage
+    that works. If it produces a structured record, show a record that is
+    correct in spirit, not just in schema. If it produces a decision, show a
+    correct one with enough context to see why it is correct.
+  - Examples are pattern material for QA agents verifying output — pick ones
+    that illustrate the intent, not the edge cases.
+  Delete this entire HTML comment once the real examples are written. -->
+
+## Bad examples
+
+<!-- REPLACE THIS COMMENT with concrete domain examples of failure. Rules:
+  - Show the almost-right answer: output that looks valid, passes tests, and
+    still violates the intent.
+  - Show the specific phrases, structures, or shortcuts that signal failure
+    in this domain.
+  - Each bad example must make it obvious WHY it is bad — either inline or
+    by pairing it with the matching good example above.
+  - The goal is recognizable failure modes, not an enumeration.
+  Delete this entire HTML comment once the real examples are written. -->
+
+## References
+
+<!-- The synthesis agent populates this section during synthesis — do not fill
+  it manually after the fact. Rules for what goes here:
+  - Each entry is a bullet: the brain note path, then ` -- `, then a one-line
+    description of what was drawn from that note for the Strategy.
+  - Only notes that actually informed a strategy decision belong here. Notes
+    the agent opened but did not use are excluded — padding the list destroys
+    the signal between each reference and the decision it supports.
+  - Descriptions are breadcrumbs: name the source and the specific finding or
+    data point drawn from it. Do not restate the full finding; do not duplicate
+    the Strategy.
+  - Paths are hints, not contracts. Brain notes move; the description is the
+    fallback. No tooling should validate reference paths, and no agent should
+    treat a stale path as an error.
+  Delete this entire HTML comment once the real references are written. -->

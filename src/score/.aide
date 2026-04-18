@@ -1,0 +1,73 @@
+---
+scope: src/score
+description: Scoring engine that transforms raw fetched signals into a weighted, confidence-qualified PackageHealth with per-category breakdowns and composite override caps
+intent: >
+  The scoring engine takes the raw data the fetch layer collected and produces
+  the health judgment a developer acts on. It must combine six independent signal
+  categories into a single aggregate that faithfully represents real dependency
+  risk — not popularity, not recency alone, but a weighted composite where
+  maintenance and security dominate, missing data is re-normalized rather than
+  penalized, and critically unhealthy conditions trigger hard score caps that no
+  combination of strong secondary signals can overcome. The output is a
+  PackageHealth that carries the aggregate, every category breakdown, a
+  confidence fraction, and an explicit list of what was unavailable and why.
+outcomes:
+  desired:
+    - "Each category scorer runs independently via a handler array — adding or removing a category requires one import and one array entry, no conditional branching"
+    - "Weights are re-normalized to the sum of available category weights so that missing signals never drag the aggregate toward zero"
+    - "Composite override caps fire after the weighted aggregate and hard-limit the score when maintenance or security is zero, preventing strong secondary categories from masking critical risk"
+    - "Confidence is expressed as the fraction of total weight budget backed by actual data, giving the consumer a single number to judge whether the score is trustworthy"
+    - "Every category that returned null appears in the unavailable signals list with a human-readable reason tied to the specific data gap"
+  undesired:
+    - "A null scorer result is treated as a zero score instead of being excluded from the weight budget — this silently penalizes packages missing data rather than re-normalizing"
+    - "The aggregate passes through without composite caps, allowing a deprecated package with strong license and community scores to land above 35"
+    - "Warnings from individual scorers are lost during aggregation instead of being merged into the top-level warning list"
+    - "Scorer dispatch uses conditionals or a type switch instead of the handler array, making category addition a multi-site edit"
+    - "Confidence is omitted or hardcoded to 1.0 when signals are missing, hiding the incomplete basis of the score from the consumer"
+---
+
+## Context
+
+The fetch layer upstream produces a FetchResult — a bag of nullable fields from the npm registry, GitHub API, and OSV. Some fields will always be present (the packument), some depend on authentication (GitHub contributor stats), some depend on external availability (OSV). The scoring engine exists as a separate layer because the translation from raw API responses to a health judgment is where all the opinionated decisions live: what weights to assign, how to handle gaps, when to override the formula. Keeping this logic isolated from both fetching and rendering means the weights and caps can evolve without touching network code or terminal output.
+
+The central risk this layer must manage is the gap between a technically correct weighted average and a meaningful health signal. A naive weighted sum over six categories will produce a passing score for a deprecated, vulnerable package as long as it has a permissive license, high downloads, and a README — the math works, the judgment is wrong. The composite override caps exist specifically to break the math when the judgment demands it.
+
+## Strategy
+
+**Handler array dispatch for category extensibility.** All six scorers are independent functions collected in an array. The orchestrator iterates the array, collects non-null results, and handles nulls as unavailable signals. No scorer knows about any other scorer. Adding a seventh category means writing a new scorer function, adding one import, and appending one array entry. The ordering of the array has no effect on output — scorers do not depend on each other's results.
+
+**Six categories with fractional weights summing to 1.0.** Maintenance (0.30) and Security (0.25) together own 55% of the weight budget, reflecting that these two vectors most directly endanger consumers. Supply Chain (0.15) captures the risk dimensions that neither maintenance nor security covers — install scripts, publisher changes, provenance. License (0.10), Community (0.10), and Quality (0.10) split the remaining 30%, deliberately capped so that popularity, permissive licensing, and good documentation cannot compensate for rot in the critical categories.
+
+**Re-normalization over available weights, never zero-fill.** When a scorer returns null (rate-limited GitHub, unreachable OSV, no repo URL), its weight is excluded from the denominator. The aggregate is computed as the weighted sum divided by the sum of weights that actually contributed data. This prevents a package hosted on GitLab from being penalized for missing GitHub signals — the score reflects what is known, and the confidence fraction tells the consumer how much of the weight budget was covered.
+
+**Composite override caps applied after the weighted aggregate.** Three ordered caps enforce hard ceilings on the final score when critical categories score zero. If both maintenance and security are zero, the score cannot exceed 15. If only security is zero, the cap is 25. If only maintenance is zero, the cap is 35. These caps fire after the normal weighted calculation and inject a warning explaining why the score was limited. The ordering matters: the most severe condition (both zero) is checked first so it takes precedence. Caps only trigger on a score of exactly zero for the category — a low-but-nonzero score does not trigger a cap, which preserves the graduated signal from partially healthy packages.
+
+**Confidence as available weight fraction.** Because category weights already sum to 1.0, the sum of available weights is directly interpretable as a confidence fraction. A confidence of 0.45 means 45% of the scoring budget was backed by real data. This number appears alongside the aggregate in the output, giving the consumer the information to decide whether to trust the result or re-run with fuller data access.
+
+**Warning aggregation from all scorers.** Each scorer returns its category score bundled with a warnings array — CVE identifiers, deprecated dependency names, publisher change alerts. The orchestrator merges all scorer warnings into a single top-level list on the PackageHealth, plus any warnings injected by the composite cap logic. No scorer warning is discarded during aggregation.
+
+## Good examples
+
+A healthy, fully-covered package produces a PackageHealth where all six categories are present, confidence is 1.0, the aggregate reflects the weighted sum without any cap intervention, the unavailable signals list is empty, and warnings (if any) are informational rather than critical.
+
+A deprecated, vulnerable package with high downloads produces a PackageHealth where maintenance is 0, security is near 0, community is high, but the aggregate is capped at 15 with a critical warning explaining the cap. The consumer sees that the math would have produced a higher number, but the cap correctly overrode it. The warnings list names the specific CVEs and the deprecation message.
+
+A package with no GitHub repo produces a PackageHealth where GitHub-dependent sub-signals within maintenance (bus factor, commit activity) are unavailable, the unavailable signals list explains why (no repository URL in packument or non-GitHub host), confidence is below 1.0, and the aggregate is computed only over the categories that returned data. The score is honest about its basis.
+
+## Bad examples
+
+Treating null scorer output as a zero score and including it in the weighted average. This means a package with an unreachable OSV API gets a security score of 0 instead of an excluded signal — the aggregate drops, the composite cap may fire incorrectly, and the consumer sees a falsely low score driven by a transient API failure rather than actual risk.
+
+Skipping re-normalization so the aggregate divides by the full 1.0 weight budget even when only three of six categories returned data. The result is an artificially deflated score (roughly half of what it should be) with no indication that the deflation is caused by missing data rather than poor package health.
+
+Omitting composite override caps and relying purely on the weighted formula. A deprecated package (maintenance = 0) with a permissive MIT license (100), strong downloads (85), good quality signals (90), moderate supply chain (70), and no CVEs (100) would score approximately 52 — above the midpoint — despite being abandoned. The cap should force it to 35 maximum.
+
+Losing scorer warnings during the destructure step, so the final PackageHealth has an empty warnings array even though the security scorer flagged three HIGH CVEs and the maintenance scorer flagged deprecation. The aggregate number looks low, but the consumer has no explanation of what drove it down.
+
+## References
+
+- `research/npm-package-health/scoring-methodologies.md` -- Category weight ratios (npms.io 30/35/35 quality/maintenance/popularity as industry baseline), finished-project exception heuristic, composite override concept derived from pkgwatch's hard-failure signals
+- `research/npm-package-health/health-signals-comprehensive.md` -- Full signal catalog with per-category thresholds (days-since-publish decay curve, bus factor tiers, dependency count bands, download trend formula) that each scorer implements independently
+- `research/npm-package-health/production-concerns.md` -- Score normalization formula for missing signals (divide by available weight sum), error isolation pattern (signal-level independent failure), confidence indicator design
+- `research/npm-package-health/license-risk.md` -- Five-tier SPDX risk classification with scores per tier, compound expression handling rules (OR = least restrictive, AND = most restrictive)
+- `research/npm-package-health/security-vulnerability-apis.md` -- OSV severity mapping (CRITICAL/HIGH/MODERATE/LOW weights), batch query pattern for dependency CVE checking, severity extraction fallback from CVSS numeric scores

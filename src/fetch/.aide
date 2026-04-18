@@ -1,0 +1,126 @@
+---
+scope: src/fetch
+description: Data-fetching orchestrator that gathers raw signals from npm registry, GitHub API, and OSV into a single result the scoring layer consumes
+intent: >
+  The fetch layer is the boundary between pkg-pulse and the outside world. Given a
+  package name and an optional GitHub token, it retrieves every raw data source the
+  scoring layer needs — packument, download counts, GitHub repo metadata, contributor
+  stats, commit activity, vulnerability records, and deprecated-dependency status —
+  and returns them as a single structured result where every field except the packument
+  is nullable. The layer succeeds when it maximizes signal coverage under real-world
+  constraints (rate limits, missing repos, transient failures) without letting any
+  single source's failure prevent the others from completing.
+outcomes:
+  desired:
+    - "The packument is always present in the result — it is the hard dependency that all other fetches derive from, and a missing packument is the only case that produces a hard failure"
+    - "Every non-packument field in the result is T or null, never undefined — null means the fetch was attempted and the data was unavailable, giving downstream consumers an unambiguous signal to degrade"
+    - "GitHub-dependent fetches are skipped entirely (resolved to null without a network call) when no GitHub repo coordinates can be extracted from the packument"
+    - "A failure in any single parallel fetch does not cancel or delay the others — each settles independently"
+    - "GitHub stats endpoints that return 202 (computing) are retried with backoff before degrading to null, so transient cache misses do not produce unnecessary signal gaps"
+  undesired:
+    - "A network error in one parallel fetch (e.g. OSV timeout) causes the entire fetch call to reject, losing all successfully fetched signals"
+    - "GitHub calls are attempted when no repo coordinates exist, wasting rate-limited requests and producing confusing 404 nulls instead of clean skips"
+    - "A 202 response from GitHub stats endpoints is treated as a final answer (null) on the first attempt without retrying, causing avoidable signal loss"
+    - "The orchestrator catches and swallows the packument 404 instead of propagating it — the caller must distinguish 'package not found' from 'partial data'"
+    - "Helper functions return undefined or throw inconsistently, forcing the orchestrator to handle both missing values and exceptions for the same logical case"
+---
+
+## Context
+
+The fetch layer sits between the CLI entry point and the scoring engine. It owns all network I/O — no other layer in pkg-pulse makes HTTP calls. The scoring layer receives a fully-resolved result struct and never needs to know which APIs were called, in what order, or what failed. This boundary is load-bearing: if the fetch layer leaks partial state, throws unexpectedly, or conflates "not attempted" with "attempted and failed," the scoring layer cannot compute correct confidence indicators or normalize for missing signals.
+
+The challenge is that the seven data sources have different reliability profiles. The npm registry packument is authoritative and nearly always available — a 404 there means the package genuinely does not exist. The npm downloads API is separate infrastructure and occasionally lags. GitHub REST endpoints are rate-limited (60 requests per hour unauthenticated, 5,000 with a token) and two of the stats endpoints (contributors, commit activity) use a deferred-computation model that returns HTTP 202 when results are not cached. The OSV vulnerability database is a free public API with no authentication but occasional timeouts. Direct-dependency deprecation checks require one packument fetch per dependency, which can mean dozens of additional registry calls for dependency-heavy packages.
+
+These varying failure modes mean the fetch layer cannot treat all sources uniformly. The packument is a hard prerequisite — without it, there is no version number for OSV, no repository URL for GitHub, and no dependency list for deprecation checks. Everything else is best-effort. The orchestration pattern (sequential prerequisite, then parallel fan-out with independent settlement) exists to maximize the data delivered to scoring while minimizing wall-clock time and ensuring that one slow or failing source never blocks the rest.
+
+## Strategy
+
+**Sequential packument, then parallel fan-out.** The packument must resolve first because it provides three pieces of data that downstream fetches depend on: the latest version tag (needed by the vulnerability query), the repository URL (needed to derive GitHub owner/repo coordinates), and the dependency list (needed to check each direct dep for deprecation). Once the packument resolves, all remaining fetches launch concurrently.
+
+**T-or-null return contract on every non-packument field.** Each helper function returns its domain type on success or null when the data is unavailable. The orchestrator wraps every parallel call in a settlement boundary so that a rejected promise (network error, unexpected status code) is mapped to null, identical to an intentional skip. Downstream consumers never see undefined and never need to catch — the null contract is the only degradation signal.
+
+**GitHub calls gated on repo coordinate extraction.** Before launching any GitHub fetch, the orchestrator runs a pure extraction step against the packument's repository field. If extraction returns null (no repo field, non-GitHub host, unparseable URL), all three GitHub fetches resolve to null immediately without making a network call. This avoids wasting rate-limited GitHub requests on packages that have no GitHub presence.
+
+**202 retry with bounded attempts for GitHub stats endpoints.** The contributor stats and commit activity endpoints use GitHub's deferred-computation model: the first request to an uncached repo returns HTTP 202 with an empty body. The fetch helpers retry up to three times with a one-second delay between attempts. If the endpoint still returns 202 after all retries, the helper returns null — the data is genuinely unavailable on this call, and the scoring layer will normalize around it.
+
+**Graceful handling of rate limits and access errors.** GitHub 403 (rate limited) and 404 (private repo, deleted repo) both map to null. The helper does not distinguish between them because the scoring layer treats both the same way: the signal is unavailable. The distinction is only relevant for user-facing messaging, which the output layer handles based on whether a GitHub token was provided.
+
+**Parallel deprecation checks reusing the packument fetcher.** Each direct dependency triggers its own packument fetch to check for the deprecated field on its latest version. These are fired in parallel with independent settlement. A dependency whose packument cannot be fetched (private, deleted, network error) is treated as non-deprecated — the conservative choice that avoids false positives.
+
+**Scoped package URL encoding.** Both the npm registry and downloads APIs require scoped package names to be percent-encoded (the @ becomes %40 and the / becomes %2F). Each helper that constructs a registry or downloads URL handles this encoding internally so the orchestrator passes raw package names without transformation.
+
+## Good examples
+
+A complete result with all signals available (authenticated GitHub, OSV responsive, no deprecated deps):
+
+```
+FetchResult {
+  packument:            full packument object (never null)
+  downloads:            { lastWeek: { downloads: 2100000 }, lastMonth: { downloads: 8400000 } }
+  githubRepo:           { archived: false, pushed_at: "2026-03-15T...", open_issues_count: 42, ... }
+  githubContributors:   [ { author: { login: "..." }, total: 340, weeks: [...] }, ... ]
+  githubCommitActivity: [ { total: 12, week: 1710720000, days: [...] }, ... ]
+  vulnerabilities:      []
+  deprecatedDeps:       []
+}
+```
+
+A degraded result for a package with no GitHub repo and an OSV timeout:
+
+```
+FetchResult {
+  packument:            full packument object
+  downloads:            { lastWeek: { downloads: 340 }, lastMonth: { downloads: 1200 } }
+  githubRepo:           null   (no repo coordinates — skipped, not failed)
+  githubContributors:   null   (no repo coordinates — skipped)
+  githubCommitActivity: null   (no repo coordinates — skipped)
+  vulnerabilities:      null   (OSV timed out — attempted and failed)
+  deprecatedDeps:       [ { name: "old-util", deprecated: "Use new-util instead" } ]
+}
+```
+
+Both results are valid inputs to the scoring layer. The scoring layer uses the null fields to compute signal coverage and re-weight the aggregate.
+
+## Bad examples
+
+**Undefined instead of null for a failed fetch:**
+
+```
+FetchResult {
+  ...
+  vulnerabilities: undefined   // Wrong: contract requires null, not undefined
+}
+```
+
+The scoring layer checks `field === null` to detect unavailable signals. An undefined value slips through that check and may be treated as "signal present but empty," producing a confident score from incomplete data.
+
+**GitHub calls attempted when no repo coordinates exist:**
+
+```
+// extractRepoUrl returned null, but the orchestrator still calls:
+fetchGithubRepo("", "", token)  // 404, wastes a rate-limited request
+```
+
+This burns one of the 60 unauthenticated requests per hour on a call that will always fail, and produces a null that is indistinguishable from a genuine rate-limit or private-repo null. The orchestrator must skip the call entirely when coordinates are absent.
+
+**Packument 404 caught and mapped to null instead of thrown:**
+
+```
+FetchResult {
+  packument: null   // Wrong: packument must never be null
+  ...
+}
+```
+
+If the packument is null, the scoring layer has no version, no dependency list, no repository URL — it cannot score anything. A packument 404 must propagate as an exception so the CLI can report "package not found" and exit non-zero.
+
+**Single Promise.all instead of Promise.allSettled:**
+
+If any one fetch rejects, Promise.all rejects the entire group, discarding all fulfilled results. A five-second OSV timeout would throw away a perfectly good GitHub response, download counts, and deprecation check results. The settlement boundary is what makes partial coverage possible.
+
+## References
+
+- `research/npm-package-health/npm-registry-api.md` -- Packument response shape, scoped package URL encoding, repository field format variants, dist-tags for latest version resolution, deprecated field location on version objects
+- `research/npm-package-health/github-api.md` -- Rate limit tiers (60 unauth vs 5,000 auth), 202 retry pattern for stats/contributors and stats/commit_activity endpoints, repo endpoint fields used for scoring
+- `research/npm-package-health/security-vulnerability-apis.md` -- OSV /v1/query and /v1/querybatch request shapes, ecosystem parameter for npm, graceful degradation on timeout
+- `research/npm-package-health/production-concerns.md` -- Parallel fetch dependency chain (packument first then fan out), error isolation pattern (signal-level independent failure), scoped package URL encoding requirement

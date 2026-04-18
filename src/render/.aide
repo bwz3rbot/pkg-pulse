@@ -1,0 +1,99 @@
+---
+scope: src/render
+description: Pure function that formats a PackageHealth record into a complete, human-readable terminal report string.
+intent: >
+  The render module is the final step in the pkg-pulse pipeline. It takes a
+  fully-scored PackageHealth record and converts it into the terminal report a
+  developer reads. The consumer is a human at a CLI who needs to understand at
+  a glance whether a package is healthy, which categories drag the score, what
+  warnings demand immediate attention, and which signals were unavailable and
+  why. Success means the report is complete, consistently structured, and
+  honest about uncertainty — nothing is hidden, nothing is fabricated, and
+  partial coverage is surfaced with enough context for the user to act on it.
+outcomes:
+  desired:
+    - Every available category appears in the report as a labelled bar chart row with its numeric score and detail strings, rendered in a stable canonical order.
+    - "The header identifies the package by name and version and states the overall score alongside signal coverage as a percentage."
+    - Warnings are present and severity-tagged when the health record contains them, and the warnings section is absent entirely when the warnings list is empty.
+    - Unavailable signals are listed by name and reason in the footer when any signals are missing, and that section is absent when all signals are available.
+    - A confidence advisory appears in the footer whenever signal coverage is below 100%, and is absent when coverage is complete.
+  undesired:
+    - A warnings section rendered with a heading but no items, or a warnings section omitted when items are present.
+    - An unavailable signals section rendered when the list is empty, or omitted when it is non-empty.
+    - A confidence advisory rendered when coverage is 100%, or suppressed when it is below 100%.
+    - Category rows appearing in an arbitrary or inconsistent order across runs.
+    - Sections joined without blank-line separation, producing a wall of text with no visual structure.
+---
+
+## Context
+
+<!-- REPLACE THIS COMMENT with the Context body. Rules for what goes here:
+  - Explain why this module exists and the domain-level problem it solves.
+  - Write for a strong generalist engineer who does not know this specific domain.
+  - Cover the constraints that shape the problem, the stakes of getting it wrong,
+    and why a naive implementation would fail.
+  - Do not restate context already carried by a parent `.aide`; child specs inherit.
+  - Only include context specific to this module's scope.
+  - No code, no filenames, no type signatures.
+  Delete this entire HTML comment once the real Context is written. -->
+
+## Strategy
+
+<!-- REPLACE THIS COMMENT with the Strategy body. Rules for what goes here:
+  - Describe how this module honors its `intent` and hits `outcomes.desired`
+    without tripping `outcomes.undesired`.
+  - Distill research (from the brain or an adjacent `research.aide`) into
+    actionable decisions.
+  - Write in decision form, not description form: each paragraph states a
+    concrete choice (tactic, threshold, structural decision, sequencing rule)
+    and the reasoning or data that justifies it.
+  - An architect agent must be able to read this and know what to do AND why
+    that approach beats the alternatives, so it can produce a plan the
+    implementor can execute without further architectural decisions.
+  - Cite sources inline, compressed: name the source, name the number or finding
+    that matters, move on. No footnotes.
+  - No code, no filenames, no type signatures, no function names, no worked
+    code examples. If the implementation were rewritten from scratch this
+    section should survive untouched.
+  Delete this entire HTML comment once the real Strategy is written. -->
+
+## Good examples
+
+<!-- REPLACE THIS COMMENT with concrete domain examples of success for this
+  module's output. Rules for what goes here:
+  - Real domain output, not code. If the module produces text, show a passage
+    that works. If it produces a structured record, show a record that is
+    correct in spirit, not just in schema. If it produces a decision, show a
+    correct one with enough context to see why it is correct.
+  - Examples are pattern material for QA agents verifying output — pick ones
+    that illustrate the intent, not the edge cases.
+  Delete this entire HTML comment once the real examples are written. -->
+
+## Bad examples
+
+<!-- REPLACE THIS COMMENT with concrete domain examples of failure. Rules:
+  - Show the almost-right answer: output that looks valid, passes tests, and
+    still violates the intent.
+  - Show the specific phrases, structures, or shortcuts that signal failure
+    in this domain.
+  - Each bad example must make it obvious WHY it is bad — either inline or
+    by pairing it with the matching good example above.
+  - The goal is recognizable failure modes, not an enumeration.
+  Delete this entire HTML comment once the real examples are written. -->
+
+## References
+
+<!-- The synthesis agent populates this section during synthesis — do not fill
+  it manually after the fact. Rules for what goes here:
+  - Each entry is a bullet: the brain note path, then ` -- `, then a one-line
+    description of what was drawn from that note for the Strategy.
+  - Only notes that actually informed a strategy decision belong here. Notes
+    the agent opened but did not use are excluded — padding the list destroys
+    the signal between each reference and the decision it supports.
+  - Descriptions are breadcrumbs: name the source and the specific finding or
+    data point drawn from it. Do not restate the full finding; do not duplicate
+    the Strategy.
+  - Paths are hints, not contracts. Brain notes move; the description is the
+    fallback. No tooling should validate reference paths, and no agent should
+    treat a stale path as an error.
+  Delete this entire HTML comment once the real references are written. -->
