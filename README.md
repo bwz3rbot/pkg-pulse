@@ -23,7 +23,7 @@
 
 ```bash
 # Clone and build
-git clone https://github.com/your-org/pkg-pulse.git
+git clone https://github.com/tetsukodai/pkg-pulse.git
 cd pkg-pulse
 npm install
 npm run build
