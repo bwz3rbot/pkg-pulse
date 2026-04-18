@@ -1,5 +1,5 @@
 {
-  "name": "pkg-pulse",
+  "name": "@tetsukodai/pkg-pulse",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",

@@ -22,16 +22,19 @@
 ## Quick Start
 
 ```bash
-# Clone and build
-git clone https://github.com/tetsukodai/pkg-pulse.git
-cd pkg-pulse
-npm install
-npm run build
+# Install globally
+npm install -g @tetsukodai/pkg-pulse
 
 # Run against any npm package
 pkg-pulse zod
 pkg-pulse express
 pkg-pulse request
+```
+
+Or run without installing:
+
+```bash
+npx @tetsukodai/pkg-pulse zod
 ```
 
 For development without building:
