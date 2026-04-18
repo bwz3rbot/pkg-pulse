@@ -2,6 +2,7 @@
   "name": "pkg-pulse",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
   "description": "CLI tool that scores npm package health across six weighted categories",
   "bin": {
     "pkg-pulse": "./dist/bin/index.js"
