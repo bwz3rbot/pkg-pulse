@@ -24,7 +24,7 @@
 
 ```bash
 # Install globally
-npm install -g @tetsukod.ai/pkg-pulse
+npm install -g @tetsukodai/pkg-pulse
 
 # Run against any npm package
 pkg-pulse zod
@@ -35,7 +35,7 @@ pkg-pulse request
 Or run without installing:
 
 ```bash
-npx @tetsukod.ai/pkg-pulse zod
+npx @tetsukodai/pkg-pulse zod
 ```
 
 For development without building:
